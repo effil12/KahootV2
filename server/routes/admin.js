@@ -3,26 +3,32 @@ const nodemailer = require("nodemailer")
 const { MongoClient } = require('mongodb')
 const mongoose = require("mongoose")
 const User = require("../models/userModel")
+const { createMongoDBConnection } = require("../initMongoDBConnection")
 const router = express.Router()
 
 const jwt = require("jsonwebtoken")
 const crypto = require("crypto")
-const { type } = require('os')
+//const { type } = require('os')
 
 mongoose.set("strictQuery", false)
 
 router.post('/signup', async (req, res) => {
-    console.log(req.body)
-    let { password, email, name} = req.body
+    let { password, email, name } = req.body
     const salt = crypto.randomBytes(32).toString("base64")
-    console.log(salt, salt.length)
     const hashedPassword = crypto.createHmac("sha512", salt).update(password).digest("hex")
-    console.log(hashedPassword, hashedPassword.length)
-    const token = jwt.sign({email: email,}, process.env.JWT_SECRET, { expiresIn: "1h"})
+    const token = jwt.sign({ email: email, }, process.env.JWT_SECRET, { expiresIn: "1h" })
+
     mongoose.connect(process.env.MONGODB_URL, {
         dbName: "kahootv2"
     })
-    
+    if (!(password || email || name)) {
+        return res.status(400).send("All input are required")
+    }
+    const oldUser = User.findOne({ email: email })
+    if (oldUser) {
+        return res.status(409).send("User already exists. Please login")
+    }
+
     const transporter = nodemailer.createTransport({
         port: 465,
         host: "Smtp.gmail.com",
@@ -39,8 +45,8 @@ router.post('/signup', async (req, res) => {
         subject: "Confirm Your Email Address",
         html: `Please click this link to confirm your email: <a href="${confirmEmailUrl}"> ${confirmEmailUrl} </a>. The link expires in 1 hour.`
     };
-    try
-    {   
+    try {
+
         const user = new User({
             ...req.body,
             password: hashedPassword + salt,
@@ -51,54 +57,47 @@ router.post('/signup', async (req, res) => {
 
         await transporter.sendMail(mailOptions);
         console.log("Mail sent");
-        return res.redirect("login")
+        res.status(200).send("Sign up success")
     }
-    catch(err)
-    {
+    catch (err) {
         console.log(err)
-        return res.redirect("signup")
+        res.redirect("signup")
     }
 })
 
 router.post("/login", async (req, res) => {
     let { email, password } = req.body
+ 
     try {
         mongoose.connect(process.env.MONGODB_URL, {
             dbName: "kahootv2"
         })
         if (!(email || password)) {
-            throw {
-                msg: "All input are required",
-                code: 400
-            }
+            return res.status(400).send("All inputs are required")
         }
         const user = await User.findOne({ email: email })
         console.log(user)
         if (!user) {
-            throw {
-                msg: "User does not exist",
-                code: 404
-            }
+            return res.status(404).send("User does not exist")
         }
         else if (!user.isVerified) {
-            throw {
-                msg: "Please confirm your email adress before login",
-                code: 401
-            }
+            return res.status(401).send("Please confirm you email adress before login")
         }
         const salt = user.password.slice(-44)
         const newHashedPassword = crypto.createHmac("sha512", salt).update(password).digest("hex") + salt
-        console.log(`newHashedPassword equal to database password: ${newHashedPassword == user.password}`)
+        console.log(`newHashedPassword equal to database password: ${newHashedPassword === user.password}`)
         if (!(newHashedPassword === user.password)) {
-            throw {
-                msg: "Password incorrect",
-                code: 400
-            }
+            return res.status(400).send("Password incorrect")
         } else {
-
+            const authToken = jwt.sign({userId:user._id, email: user.email},process.env.JWT_SECRET)
+            user.authToken = authToken
+            await user.save
+            res.header("Auth", authToken)
+            res.status(200).send("Login success")
         }
     } catch (error) {
-        res.status(error.code).send(error.msg)
+        console.log(error)
+        res.status(500).send(error.message)
     }
 })
 
