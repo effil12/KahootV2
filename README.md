@@ -1,2 +1,2 @@
 # Kahoot clone project
-(Under development)
+(In development)
